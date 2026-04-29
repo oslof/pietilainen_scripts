@@ -236,8 +236,8 @@ cor_dat <- ELA_data %>%
                 `Parents Unemployed` = parent_unemp,
                 `Family Conflict`  = fam_conf,
                 `Subject Ill` = subj_ill,
-                `bullied` = bullied,
-                `assault` = assault,
+                `Bullied` = bullied,
+                `Assault` = assault,
                 `Sexual Abuse` = sex_ab) %>% 
   na.omit() # Remove NAs
 
@@ -359,19 +359,19 @@ df_plot <- df_plot %>%
   dplyr::mutate(plot_var = dplyr::case_when(
     variable == "ment_father" ~ "Father Psych. Disorder",
     variable == "alc_father" ~ "Alcoholic Father",
-    variable =="ment_mother" ~ "Mother Psych. Disorder",
-    variable =="alc_mother" ~ "Alcoholic Mother",
-    variable =="parent_ill" ~ "Parents Ill",
-    variable =="parent_div" ~ "Parents Divorced",
-    variable =="fam_conf" ~ "Family Conflict",
-    variable =="fam_fin_prob" ~ "Fam. Financial Prob.",
-    variable =="parent_unemp" ~ "Parents Unemployed",
-    variable =="subj_ill" ~ "Subject Ill",
-    variable =="bullied" ~ "bullied",
-    variable == "assault" ~ "assault",
-    variable =="sex_ab" ~ "Sexual Abuse",
-    variable =="diff_conc" ~ "Diff. Concentrating",
-    variable =="diff_beh" ~ "Diff. Behavior",
+    variable == "ment_mother" ~ "Mother Psych. Disorder",
+    variable == "alc_mother" ~ "Alcoholic Mother",
+    variable == "parent_ill" ~ "Parents Ill",
+    variable == "parent_div" ~ "Parents Divorced",
+    variable == "fam_conf" ~ "Family Conflict",
+    variable == "fam_fin_prob" ~ "Fam. Financial Prob.",
+    variable == "parent_unemp" ~ "Parents Unemployed",
+    variable == "subj_ill" ~ "Subject Ill",
+    variable == "bullied" ~ "Bullied",
+    variable == "assault" ~ "Assault",
+    variable == "sex_ab" ~ "Sexual Abuse",
+    variable == "diff_conc" ~ "Diff. Concentrating",
+    variable == "diff_beh" ~ "Diff. Behavior",
     TRUE ~ NA)) %>%
   dplyr::filter(value == "Yes", category %in% c("Abuse & Illness", "Household Dysfunciton", "Behavioral \nAdversities")) %>% # Only Yes answers
   dplyr::mutate(Diagnosis = factor(Diagnosis, levels = df_order))
