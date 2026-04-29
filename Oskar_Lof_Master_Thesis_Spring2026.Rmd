@@ -1,0 +1,1773 @@
+---
+title: "Early Life Adversities and Psychotic Disorders: An Investigtion of Disease Course Severity"
+author: "Oskar Löf"
+date: "2026-04-22"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Libraries
+```{r Libraries, echo=FALSE}
+library(tidyverse)
+library(car)
+library(sandwich)
+library(emmeans)
+library(ordinal)
+library(ggpubr)
+library(ggstance)
+```
+
+# Load and preprocess
+```{r load and preprocess data, echo=FALSE}
+# Load data
+df <- readRDS("placeholder.rds")
+
+# ELA variable column names
+cols1 <- c("ment_father",
+          "alc_father",
+          "ment_mother",
+          "alc_mother",
+          "parent_ill",
+          "parent_div",
+          "fam_conf",
+          "fam_fin_prob",
+          "parent_unemp",
+          "subj_ill",
+          "bullied",
+          "assault",
+          "sex_ab")
+cols2 <- c("diff_conc",
+          "diff_beh")
+cols <- c(cols1, cols2)
+
+# Create master data set
+ELA_data <- df %>%
+  dplyr::filter(age_of_onset >= 2) %>%
+  dplyr::mutate(dplyr::across(-c(person, sex, Diagnostic_category), ~ as.numeric(.x))) %>% # Make variables numeric
+  dplyr::mutate(sex = factor(sex, levels = c("male", "female"))) %>% # sex as factor, male as baseline
+  dplyr::mutate(dplyr::across(dplyr::all_of(cols1),
+                ~ dplyr::case_when(       # Re-code variables in col1
+                    #...
+                  ))) %>%
+  dplyr::mutate(dplyr::across(dplyr::all_of(cols2),
+                ~ dplyr::case_when(       # Re-code variables in col2
+                    #...
+                  ))) %>%
+  dplyr::mutate(dplyr::across(cols2,
+                ~ dplyr::if_else(
+                    #...           # If no difficulties in school at all, then no difficulties in the other school specific variables either
+                  ))) %>%
+ dplyr::mutate(ELA_score = rowSums(dplyr::across(c(diff_conc,
+                                         diff_beh,
+                                         ment_father,
+                                         alc_father,
+                                         ment_mother,
+                                         alc_mother,
+                                         parent_ill,
+                                         parent_div,
+                                         fam_conf,
+                                         fam_fin_prob,
+                                         parent_unemp,
+                                         subj_ill,
+                                         bullied,
+                                         assault,
+                                         sex_ab
+                                         ), ~ as.numeric(.x)), na.rm = TRUE)
+         ) %>% # Create the ELA score by summing all variables
+ dplyr::mutate(ref_yob = year_of_birth - min(year_of_birth, na.rm = TRUE)) %>% # Reference year of birth as a covariate
+ dplyr::mutate(house_dys = rowSums(dplyr::across(c(ment_father, 
+                                      alc_father,
+                                         ment_mother,
+                                         alc_mother,
+                                         parent_ill,
+                                         parent_div,
+                                         fam_conf,
+                                         fam_fin_prob,
+                                         parent_unemp
+                                         ), ~ as.numeric(.x)), na.rm = TRUE)
+         ) %>% # Create Household Dysfunciton Factor
+ dplyr::mutate(abuse_ill = rowSums(dplyr::across(c(subj_ill,
+                                         bullied,
+                                         assault,
+                                         sex_ab
+                                         ), ~ as.numeric(.x)), na.rm = TRUE)
+         ) %>% # Create Abuse & Illness Factor
+ dplyr::mutate(beh_adv = rowSums(dplyr::across(c(diff_conc,
+                                         diff_beh
+                                         ), ~ as.numeric(.x)), na.rm = TRUE)
+         ) %>% # Create Behavioral Adversities Factor
+ dplyr::mutate(Diagnostic_category = factor(Diagnostic_category, levels = c("Other psychosis", "Psychotic MDD", "Bipolar", "Schizoaffective", "Schizophrenia"), ordered = TRUE)) %>% # Factorize diagnoses according to hierarchical model
+ dplyr::mutate(lev_of_edu = factor(lev_of_edu, levels = c("primary", "secondary", "tertiary"), ordered = TRUE)) %>% # And make them ordered factors
+ dplyr::mutate(ELA_score_noBA = house_dys + abuse_ill) %>% # Calculating score without behavioral adversities for comparison
+ dplyr::filter(rowMeans(across(all_of(cols), is.na)) <= 0.4) # Remove cases where ID hasn't answered enough questions
+
+# Diagnosis-specific data sets
+scz <- ELA_data %>% dplyr::filter(Diagnostic_category == "Schizophrenia")
+sad <- ELA_data %>% dplyr::filter(Diagnostic_category == "Schizoaffective")
+bd <- ELA_data %>% dplyr::filter(Diagnostic_category == "Bipolar")
+mdd <- ELA_data %>% dplyr::filter(Diagnostic_category == "Psychotic MDD")
+other <- ELA_data %>% dplyr::filter(Diagnostic_category == "Other psychosis")
+```
+
+# Figure presets
+```{r figure presets, echo=FALSE}
+# Define base figure presets
+ggplot2::theme_set(ggplot2::theme_bw() +
+          ggplot2::theme(
+            text = ggplot2::element_text(size = 14, family = "Times New Roman"),
+            legend.title = ggplot2::element_text(face = "bold"),
+            legend.text = ggplot2::element_text(size = 14, family = "Times New Roman"),
+            plot.title = ggplot2::element_text(face = "bold", size = 16),
+            axis.title = ggplot2::element_text(face = "bold", size = 16),
+            axis.text = ggplot2::element_text(size = 15)
+            )
+          )
+```
+
+# Psychotic diagnosis and sex distributions (Figure 1A)
+```{r diag and sex dist}
+# Plot data with count data for labels
+plot_data <- ELA_data %>%
+  dplyr::count(Diagnostic_category, sex) %>%
+  dplyr::mutate(diag_prop = n / sum(n))
+
+# Pairwise chi-square tests
+table <- table(ELA_data$Diagnostic_category, ELA_data$sex)
+results <- chisq.test(table)
+
+# post-hoc testing
+diags <- list(ELA_data, scz, sad, bd, mdd, other)
+res <- data.frame(diag = c("total", "scz", "sad", "bd", "mdd", "other"), chi_stat = c(0, 0, 0, 0, 0, 0), p.val = c(0, 0, 0, 0, 0, 0), padj = c(0, 0, 0, 0, 0, 0))
+i <- 1
+for (d in diags){
+  c_table <- table(d$sex)
+  c <- chisq.test(c_table)
+  res[i, 2] <- c$statistic
+  res[i, 3] <- c$p.value
+  i <- i + 1
+}
+# Adjust p values
+res$padj <- p.adjust(res$p.val, method = "BH")
+res <- res %>% dplyr::mutate(sig = dplyr::case_when(
+  padj <= 0.001 ~ "***",
+  padj <= 0.01 ~ "**",
+  padj <= 0.05 ~ "*", 
+  TRUE ~ ""))
+
+# Plot
+ggplot2::ggplot(plot_data, ggplot2::aes(x = Diagnostic_category, y = diag_prop, fill = sex, color = sex)) +
+  ggplot2::geom_bar(stat = "Identity", 
+           position = ggplot2::position_dodge(0.94),
+           alpha = 0.4) +
+  ggplot2::scale_y_continuous(limits = c(0, 0.4)) +
+  ggplot2::scale_x_discrete(limits = c( 
+                              "Other psychosis", 
+                              "Psychotic MDD", 
+                              "Bipolar", 
+                              "Schizoaffective", 
+                              "Schizophrenia")
+                              ) +
+  ggplot2::scale_fill_viridis_d(aesthetics = c("fill", "color")) +
+  ggplot2::labs(title = "SUPER-Finland Psychotic Diagnosis Distribution", 
+                x = NULL, 
+                y = "Proportion", 
+                fill = "Sex", 
+                color = "Sex") +
+  ggplot2::theme(axis.text.x = ggplot2::element_text(hjust = 1, vjust = 1, angle = 15, color = "black"))
+
+#ggplot2::ggsave("placeholder.tiff", plot = ggplot2::last_plot(), width = 7.5, height = 5, units = "in", dpi = 600)
+```
+
+# Age at Participation distribution (Figure 1B)
+```{r age at participation dist}
+# Testing for significant sex differences
+chisq.test(table(ELA_data$sex))
+
+# Statistics for summary panel
+stats <- ELA_data %>%
+  dplyr::select(sex, age_Questionnaire) %>%
+  dplyr::summarize(mu = mean(age_Questionnaire, na.rm = TRUE), 
+            median = median(age_Questionnaire, na.rm = TRUE), 
+            sd = sd(age_Questionnaire, na.rm = TRUE))
+
+# Anonymize
+plot_df <- ELA_data %>%
+  dplyr::mutate(
+    #...
+  )
+
+#ggplot2::ggplot_build(
+ggplot2::ggplot(plot_df, ggplot2::aes(x = age_Questionnaire, fill = sex, color = sex)) +
+  ggplot2::geom_histogram(position = "dodge",
+                          alpha = 0.4,
+                          bins = 64) +
+  ggplot2::labs(title = "SUPER-Finland Age and Sex Distribution", 
+                x = "Age (years)", 
+                y = "Count", 
+                fill = "Sex", 
+                color = "Sex") + 
+  ggplot2::scale_fill_viridis_d(aesthetics = c("fill", "color")) +
+  ggplot2::scale_x_continuous(limits = c(17, 80))#)$data[[1]]
+
+# Counts per bars
+min(table(plot_df$age_Questionnaire))
+table(plot_df$sex)
+
+#ggplot2::ggsave("placeholder.tiff", plot = ggplot2::last_plot(), width = 7.5, height = 5, units = "in", dpi = 600)
+```
+
+# Hierarchical clusering of ELA variables (Figure 2)
+```{r hierarchical clustering}
+# Create dataframe with only ELA variables
+cor_dat <- ELA_data %>% 
+  dplyr::select(dplyr::all_of(cols)) %>% 
+  dplyr::rename(`Diff. Concentrating` = diff_conc,
+                `Diff. Behavior` = diff_beh,
+                `Father Psych. Disorder` = ment_father,
+                `Alcoholic Father` = alc_father,
+                `Mother Psych. Disorder` = ment_mother,
+                `Alcoholic Mother` = alc_mother,
+                `Parents Ill` = parent_ill,
+                `Parents Divorced` = parent_div,
+                `Fam. Financial Problems` = fam_fin_prob,
+                `Parents Unemployed` = parent_unemp,
+                `Family Conflict`  = fam_conf,
+                `Subject Ill` = subj_ill,
+                `bullied` = bullied,
+                `assault` = assault,
+                `Sexual Abuse` = sex_ab) %>% 
+  na.omit() # Remove NAs
+
+# Create correlation matrix
+cormat <- cor(cor_dat)
+cormat[is.na(cormat)] <- 0 # Remove NAs
+diag(cormat) <- 1 # Make sure diagonal = 1
+
+# Transform into distance matrix
+d <- as.dist(1 - cormat)
+
+# Run hierarchical clustering
+hc <- hclust(d, method = "ward.D2")
+
+# Create dendrogram plot
+par(family = "Times New Roman",font = 1)
+
+#tiff("placeholder.tiff", width = 3000, height = 1750, res = 300)
+plot(
+  hc,
+  main = "Hierarchical Clustering Dendrogram of ELA Variables",
+  font.main = 2,
+  cex.main = 1,
+  xlab = "",
+  yaxt = "n",
+  sub = "",
+  font.lab = 2,
+  cex.lab = 1.2,
+  #hang = -0.1,                 # Adjust label height
+  family = "Times New Roman"
+)
+
+# Manually add axis for correlations
+axis(2, at = seq(0, max(hc$height), length.out = 10), labels = rev(round(seq(min(cormat), max(cormat), length.out = 10), 2)))
+#dev.off()
+
+rect.hclust(hc, k = 3, border = 2:4) # (Rectangles added to plot afterwards outside of R)
+```
+
+# ELA variable answer distributions diagnosis-wise (Figure 3)
+```{r variable answers}
+# All diagnostic-specific data in separate data frames in a list
+dfs <- list(
+  Total = ELA_data,
+  SCZ = scz,
+  SAD = sad,
+  BD = bd,
+  `Psychotic MDD` = mdd,
+  `Other Psychosis` = other
+)
+
+# Convert to long format for plotting
+dfs_long <- dfs %>%
+  purrr::imap_dfr(~dplyr::mutate(.x, Diagnosis = .y)) %>%      # .y is the list name (df1, df2, ...)
+  tidyr::pivot_longer(
+    cols = dplyr::all_of(cols),
+    names_to = "variable",
+    values_to = "value"
+  )
+
+# Count proportional values for each variable per diagnosis
+dfs_props <- dfs_long %>%
+  dplyr::group_by(Diagnosis, variable, value) %>%
+  dplyr::summarise(n = n(), .groups = "drop_last") %>%
+  dplyr::mutate(prop = n / sum(n)) %>%
+  dplyr::ungroup()
+
+# Define order in plot and ELA categories for faceting
+df_order <- c("Total", "SCZ", "SAD", "BD", "Psychotic MDD", "Other Psychosis")
+house_dys <- c("ment_father", "alc_father", "ment_mother", "alc_mother", "parent_ill", "parent_div", "fam_conf", "fam_fin_prob", "parent_unemp")
+abuse_ill <- c("subj_ill", "bullied", "assault", "sex_ab")
+beh_adv <- c("diff_conc", "diff_beh")
+
+# Build final plot df
+df_plot <- dfs_props %>%
+ dplyr::mutate(Diagnosis = factor(Diagnosis, levels = df_order)) %>% # Make diagnosis a factor and order it by hierarchical severity model
+ dplyr::mutate(category = dplyr::case_when(
+    variable %in% house_dys ~ "Household Dysfunciton",              #
+    variable %in% abuse_ill ~ "Abuse & Illness",                    # Apply each variable to correct ELA category
+    variable %in% beh_adv ~ "Behavioral \nAdversities"              #
+  ))
+
+# Define SCZ vs rest chi-squared test data frame
+df_chi_test <- ELA_data %>%
+ dplyr::mutate(scz_rest = dplyr::case_when(
+    Diagnostic_category == "Schizophrenia" ~ "SCZ",
+    TRUE ~ "rest"))
+
+# Chi squared test of independence
+chi_sq_test <- lapply(cols, function(v) {
+  tab <- table(df_chi_test[[v]], df_chi_test$scz_rest)
+  test <- chisq.test(tab)
+  
+  data.frame(
+    variable  = v,
+    n         = sum(tab),
+    chi_sq    = test$statistic,
+    df        = test$parameter,
+    p_value   = test$p.value
+  )
+})
+df_chi_sq_res <- do.call(rbind, chi_sq_test) %>%
+  dplyr::mutate(p_adjusted = p.adjust(p_value, method = "BH")) %>% # Adjust p-values
+  dplyr::arrange(p_adjusted)
+
+# Convert all significant values to one diagnosis for plotting (they are all the same within an ELA variable)
+p_vals <- data.frame(variable = df_chi_sq_res$variable, p = df_chi_sq_res$p_adjusted) %>%
+  dplyr::mutate(Diagnosis = "Total")
+
+res <- p_vals %>% dplyr::mutate(sig = dplyr::case_when(
+  Diagnosis == "Total" & p <= 0.001 ~ "***",
+  Diagnosis == "Total" & p <= 0.01 ~ "**",
+  Diagnosis == "Total" & p <= 0.05 ~ "*", 
+  TRUE ~ ""))
+
+# Adding significance data to df_plot and change to plot friendly names
+df_plot <- df_plot %>% 
+  dplyr::left_join(res, by = c("variable", "Diagnosis")) %>%
+  dplyr::mutate(plot_var = dplyr::case_when(
+    variable == "ment_father" ~ "Father Psych. Disorder",
+    variable == "alc_father" ~ "Alcoholic Father",
+    variable =="ment_mother" ~ "Mother Psych. Disorder",
+    variable =="alc_mother" ~ "Alcoholic Mother",
+    variable =="parent_ill" ~ "Parents Ill",
+    variable =="parent_div" ~ "Parents Divorced",
+    variable =="fam_conf" ~ "Family Conflict",
+    variable =="fam_fin_prob" ~ "Fam. Financial Prob.",
+    variable =="parent_unemp" ~ "Parents Unemployed",
+    variable =="subj_ill" ~ "Subject Ill",
+    variable =="bullied" ~ "bullied",
+    variable == "assault" ~ "assault",
+    variable =="sex_ab" ~ "Sexual Abuse",
+    variable =="diff_conc" ~ "Diff. Concentrating",
+    variable =="diff_beh" ~ "Diff. Behavior",
+    TRUE ~ NA)) %>%
+  dplyr::filter(value == "Yes", category %in% c("Abuse & Illness", "Household Dysfunciton", "Behavioral \nAdversities")) %>% # Only Yes answers
+  dplyr::mutate(Diagnosis = factor(Diagnosis, levels = df_order))
+
+# Check range of proportions for all variables
+result <- df_plot %>%
+  dplyr::group_by(variable) %>%
+  dplyr::summarise(
+    min_prop = min(prop),
+    max_prop = max(prop),
+    proportional_range = max_prop - min_prop
+  )
+
+# Plot data, faceting by Household Dysfunction, Abuse & Illness and Behavioral Adversities
+p <- df_plot %>%
+  dplyr::mutate(plot_var = reorder(plot_var, -prop)) %>%
+  ggplot2::ggplot(ggplot2::aes(x = plot_var, y = prop, fill = Diagnosis)) +
+  ggplot2::geom_col(position = ggplot2::position_dodge()) +
+  ggplot2::geom_text(ggplot2::aes(x = plot_var, y = (prop + 0.15), label = sig), 
+            size = 4, inherit.aes = FALSE, family = "Times New Roman") +
+  ggplot2::facet_grid(~ category, scales = "free_x", space = "free_x") +
+  ggplot2::scale_fill_viridis_d(direction = -1) +
+  ggplot2::labs(title = "ELA Score Variables Diagnosis-wise", x = NULL, y = "Proportion") +
+  ggplot2::ylim(0,1) +
+  ggplot2::theme(axis.text = ggplot2::element_text(size = 12),
+                 axis.text.x = ggplot2::element_text(angle = 45, hjust = 1, color = "black"),
+                 strip.text = ggplot2::element_text(size = 12),
+                 legend.text = ggplot2::element_text(size = 12))
+print(p)
+
+#ggplot2::ggsave("placeholder.tiff", plot = p, width = 8, height = 6, units = "in", dpi = 600)
+
+# Smallest N in plot
+count <- df_plot %>% dplyr::select(c(value, n)) %>% dplyr::filter(value == "Yes")
+min(count$n)
+```
+
+# ELA score distribution  (Figure 4A)
+```{r ela score dist}
+# Summary statistics of the ELA score
+stats <- ELA_data %>%
+  dplyr::summarise(
+    m = mean(ELA_score, na.rm = TRUE),
+    s = sd(ELA_score, na.rm = TRUE),
+    med = median(ELA_score, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Anonymize data
+temp <- ELA_data %>%
+ dplyr::mutate(
+   #...
+   )
+
+# Barchart of ELA distribution
+ggplot2::ggplot(temp, ggplot2::aes(x = factor(ELA_score), y = ggplot2::after_stat(prop), group = 1)) +
+  ggplot2::geom_bar(fill = "#440154", width = 0.8) +
+  ggplot2::labs(title = "ELA Score Distribution", x = "ELA Score", y = "Proportion") +
+  ggplot2::ylim(0, 0.14)
+
+# Counts per bar
+table(temp$ELA_score)
+
+#ggplot2::ggsave("placeholder.tiff", plot = ggplot2::last_plot(), width = 6, height = 5, units = "in", dpi = 600)
+```
+
+# Diagnosis-wise comparison of ELA scores (Figure 4B)
+```{r diag-wise emm comparison}
+# ANCOVA between diagnoses
+fit <- lm(ELA_score ~ Diagnostic_category + ref_yob + sex, data = ELA_data)
+sm <- summary(fit)
+anova(fit)
+pf(sm$fstatistic[1], sm$fstatistic[2], sm$fstatistic[3], lower.tail = FALSE) # p-value of F test
+
+## Produce EMMs for each diagnosis
+emm <- emmeans::emmeans(fit, ~ Diagnostic_category, vcov = sandwich::vcovHC(fit, type = "HC3"))
+em_df <- as.data.frame(emm)
+
+## Pairwise comparison of EMMs in plot
+pairs <- as.data.frame(pairs(emm, adjust = "BH"))
+
+# Plot
+ggplot2::ggplot(data = ELA_data, ggplot2::aes(x = Diagnostic_category, y = ELA_score), fill = "ELA") +
+  ggplot2::geom_boxplot(width = 0.5, 
+               outlier.shape = NA,
+               fill = "white",
+               color = "grey70") +
+  ggplot2::stat_boxplot(geom = "errorbar", width = 0.1, color = "grey70") +
+  ggpubr::geom_bracket(xmin = "Schizophrenia", xmax = "Bipolar", y.position = 16, label = "***", family = "Times New Roman", label.size = 5, color = "#440154",) +
+  ggpubr::geom_bracket(xmin = "Other psychosis", xmax = "Bipolar", y.position = 17.4, label = "***", family = "Times New Roman", label.size = 5, color = "#440154",) +
+  ggplot2::geom_point(data = em_df,
+             aes(y = emmean, fill = "EMM"),
+             shape = 18,
+             color = "#440154",
+             size = 5) +
+  ggplot2::labs(title = "ELA and EMM Score per Psychotic Diagnosis", x = NULL, y = "Score") +
+  ggplot2::ylim(0, 18) +
+  ggplot2::theme(panel.grid.minor = ggplot2::element_blank(),
+        legend.title = ggplot2::element_blank(),
+        axis.text.x = ggplot2::element_text(hjust = 1, vjust = 1, angle = 15, color = "black"))
+
+#ggplot2::ggsave("placeholder.tiff", plot = ggplot2::last_plot(), width = 8, height = 5, units = "in", dpi = 600)
+
+# N count of boxes
+count <- temp %>% dplyr::select(c(ELA_score, Diagnostic_category)) %>% na.omit()
+summary(count)
+```
+
+# Age at first psychosis regression (Figure 5)
+## Age of onset distribution (Figure 5A)
+```{r age of onset dist}
+# Summary statistics
+stats <- ELA_data %>%
+ dplyr::mutate(age_of_onset = round(age_of_onset, 0)) %>%
+  dplyr::summarise(
+    m = mean(age_of_onset, na.rm = TRUE),
+    s = sd(age_of_onset, na.rm = TRUE),
+    med = median(age_of_onset, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Create data frame to plot and anonymize data
+plot_df <- ELA_data %>%
+ dplyr::mutate(age_of_onset = round(age_of_onset, 0)) %>%
+ dplyr::mutate(
+    # ...
+  )
+
+# Bar chart of age distribution
+#ggplot2::ggplot_build(
+  ggplot2::ggplot(plot_df, ggplot2::aes(x = age_of_onset)) +
+  ggplot2::geom_histogram(
+                 position = "dodge",
+                 color = "black",
+                 fill = "#440154",
+                 bins = 63) +
+  ggplot2::labs(title = "Age at First Psychotic Hospitalization", x = "Age (years)", y = "Count") + 
+  ggplot2::scale_x_continuous(limits = c(9, 71), breaks = seq(0, 100, by = 10))#)$data[[1]]
+
+# Counts
+min(table(plot_df$age_of_onset))
+
+#ggplot2::ggsave("placeholder.tiff", plot = ggplot2::last_plot(), width = 7, height = 5, units = "in", dpi = 600)
+```
+
+## Figure 5B: ELA - age regression
+```{r ela-age reg}
+# Run linear model
+model <- lm(age_of_onset ~ 
+               ELA_score +
+               sex +
+               ref_yob
+            , data = ELA_data)
+
+sm <- summary(model)
+pf(sm$fstatistic[1], sm$fstatistic[2], sm$fstatistic[3], lower.tail = FALSE, log.p = TRUE)
+
+# Assumptions:
+## Linearity - residual plot
+plot(fitted(model), residuals(model))
+
+## Normality - QQ-plot
+car::qqPlot(residuals(model))
+
+## Multicollinearity - VIF
+car::vif(model)
+
+# Creating new data for plotting and fixing age and sex
+newdat <- data.frame(
+  ELA_score = seq(-1, 20, length.out = 200),
+  sex = names(which.max(table(ELA_data$sex))),
+  ref_yob = mean(ELA_data$ref_yob, na.rm = TRUE)
+)
+
+# y_hat is used for the regression line in the model
+newdat$y_hat <- predict(model, newdat)
+
+# Factorize and anonymize data
+temp <- ELA_data %>%
+ dplyr::mutate(
+   #...
+   )
+
+# Plot
+ggplot2::ggplot(temp, ggplot2::aes(x = ELA_score, y = age_of_onset)) +
+  ggplot2::geom_violin(trim = FALSE, fill = "#440154", color = "black", alpha = 0.7) +
+  ggplot2::geom_boxplot(width = 0.25, outlier.shape = NA) +
+  ggplot2::geom_line(data = subset(newdat, ELA_score >= 0 & ELA_score <= 16), 
+                         ggplot2::aes(x = ELA_score, y = y_hat), 
+                         colour = "red", 
+                         alpha = 0.8, 
+                         linetype = "dashed", 
+                         linewidth = 1) +
+  ggplot2::scale_x_discrete(drop = FALSE) +
+  ggplot2::labs(title = "Linear Regression Between Age of Onset and ELA Score", x = "ELA Score", y = "Age (years)") +
+  ggplot2::ylim(0.1, 95) +
+  ggplot2::theme(panel.grid.minor = ggplot2::element_blank())
+
+# Counts
+table(temp$ELA_score)
+
+#ggplot2::ggsave("placeholder.tiff", plot = ggplot2::last_plot(), width = 7, height = 5, units = "in", dpi = 600)
+```
+
+## Diagnosis-wise forest plot (Figure 5C) and factorized forest plot (Figure 5D)
+```{r ela-age diag-wise}
+# List of variables to analyze
+groups <- list(
+   Score = "ELA_score",
+  `Abuse & Illness` = "abuse_ill",
+  `Behavioral Adversities` = "beh_adv",
+  `Household Dysfunciton` = "house_dys",
+  `Confounding Factors` = c("sexfemale", "ref_yob")
+)
+
+# List of datasets to analyze
+diags <- list(ELA_data, scz, sad, bd, mdd, other)
+diag_names <- c("Total", "SCZ", "SAD", "BD", "Psychotic MDD", "Other Psychosis")
+
+## Multicollinearity check for factorized models
+model <- lm(age_of_onset ~ 
+              abuse_ill +
+              beh_adv +
+              house_dys +
+              sex +
+              ref_yob
+              , data = ELA_data)
+car::vif(model)
+
+# ELA score - age of onset statistics
+## Loops through each dataset and applies an array of statistics to score_row_raw
+score_row_raw <- dplyr::tibble()
+i <- 1
+for (d in diags){
+  fit_tot <- lm(age_of_onset ~ 
+              ELA_score +
+              sex + 
+              ref_yob
+              , data = d)
+  
+  V_tot <- sandwich::vcovHC(fit_tot, type = "HC3")
+  sm <- summary(fit_tot)
+  
+  adj_r_tot <- sm$adj.r.squared
+  f_tot <- sm$fstatistic[1]
+  df1_tot <- sm$fstatistic[2]
+  df2_tot <- sm$fstatistic[3]
+  pf_tot <- pf(sm$fstatistic[1], sm$fstatistic[2], sm$fstatistic[3], lower.tail = FALSE)
+  
+  beta_tot <- coef(fit_tot)
+  se_tot   <- sqrt(diag(V_tot))
+  tval_tot <- beta_tot / se_tot
+  p_tot <- 2 * pt(abs(tval_tot), df = df.residual(fit_tot), lower.tail = FALSE)
+  
+  score_row <- dplyr::tibble(
+    term = names(beta_tot),
+    estimate = as.numeric(beta_tot),
+    std.error = as.numeric(se_tot),
+    p.value = as.numeric(p_tot),
+    crit = qt(1 - 0.05/2, df = df.residual(fit_tot)),
+    conf.low  = estimate - crit * std.error,
+    conf.high = estimate + crit * std.error,
+    
+    adj_r2 = as.numeric(adj_r_tot),
+    f_val = as.numeric(f_tot),
+    f_p =  as.numeric(pf_tot),
+    df1 = as.numeric(df1_tot),
+    df2 = as.numeric(df2_tot),
+  
+    group = dplyr::case_when(
+        term %in% groups$Score ~ "ELA Score",
+        term %in% groups$`Confounding Factors` ~ "Confounding Factors",
+        TRUE ~ "Other"
+        ),
+    diag = diag_names[i]
+  ) %>% dplyr::filter(term == "ELA_score") # Only extract statistics related to the ELA score's regression
+  
+  score_row_raw <- dplyr::bind_rows(score_row_raw, score_row)
+  i <- i + 1
+}
+
+# Factorized ELA score - age of onset statistics
+## Loops through each dataset and applies an array of statistics to df_plot_raw
+df_plot_raw = dplyr::tibble()
+i <- 1
+for (d in diags){
+  fit <- lm(age_of_onset ~ 
+              house_dys +
+              beh_adv +
+              abuse_ill +
+              sex + 
+              ref_yob
+              , data = d)
+  
+  V <- sandwich::vcovHC(fit, type = "HC3")
+  sm <- summary(fit)
+  
+  adj_r <- sm$adj.r.squared
+  f <- sm$fstatistic[1]
+  df1_val <- sm$fstatistic[2]
+  df2_val <- sm$fstatistic[3]
+  pf <- pf(sm$fstatistic[1], sm$fstatistic[2], sm$fstatistic[3], lower.tail = FALSE)
+  
+  beta <- coef(fit)
+  se   <- sqrt(diag(V))
+  tval <- beta / se
+  pval <- 2 * pt(abs(tval), df = df.residual(fit), lower.tail = FALSE)
+  
+  df_plot <- dplyr::tibble(
+    term = names(beta),
+    estimate = as.numeric(beta),
+    std.error = as.numeric(se),
+    statistic = as.numeric(tval),
+    p.value = as.numeric(pval),
+    crit = qt(1 - 0.05/2, df = df.residual(fit)),
+    conf.low  = estimate - crit * std.error,
+    conf.high = estimate + crit * std.error,
+    
+    adj_r2 = as.numeric(adj_r),
+    f_val = as.numeric(f),
+    f_p =  as.numeric(pf),
+    df1 = as.numeric(df1_val),
+    df2 = as.numeric(df2_val),
+    
+    # Assign each statistic to a group
+    group = dplyr::case_when(
+        term %in% groups$Score ~ "ELA Score",
+        term %in% groups$`Household Dysfunciton`  ~ "Household Dysfunciton",
+        term %in% groups$`Behavioral Adversities`   ~ "Behavioral Adversities",
+        term %in% groups$`Abuse & Illness` ~ "Abuse & Illness",
+        term %in% groups$`Confounding Factors` ~ "Confounding Factors",
+        TRUE ~ "Other"
+      ), 
+    diag = diag_names[i]
+    ) %>%
+    dplyr::filter(term != "(Intercept)") # remove intercept
+  df_plot_raw <- dplyr::bind_rows(df_plot_raw, df_plot)
+  i <- i + 1
+}
+
+# Individual padding for each significance mark in plot
+x_range <- range(c(df_plot_raw$conf.low, df_plot_raw$conf.high), na.rm = TRUE)
+x_pad <- 0.01 * diff(x_range)
+
+# Finalize plot data frame by combining df_plot_raw and score_row_raw
+df_plot_tot <- dplyr::bind_rows(df_plot_raw, score_row_raw) %>%
+  dplyr::mutate(term = reorder(term, estimate)) %>% 
+  dplyr::mutate(group = factor(group, levels = c("ELA Score", "Abuse & Illness", "Behavioral Adversities", "Household Dysfunciton", "Confounding Factors"))) %>%
+  dplyr::mutate(ns_x = conf.high + x_pad) %>% # Add padding for significance markers
+  dplyr::filter(group != "Confounding Factors") %>%
+  dplyr::mutate(diag = factor(diag, levels = c("Total", "SCZ", "SAD", "BD", "Psychotic MDD", "Other Psychosis"))) %>%
+  dplyr::mutate(diag = forcats::fct_rev(diag)) %>%
+  dplyr::mutate(p_adj = p.adjust(p.value, method = "BH")) %>% # adjust p-values
+  dplyr::mutate(ns_label = dplyr::case_when(
+        p_adj < 0.001 ~ "***",
+        p_adj < 0.01 ~ "**",       
+        p_adj < 0.05 ~ "*",       
+        TRUE ~ ""))
+
+# Plot
+ggplot2::ggplot(df_plot_tot, ggplot2::aes(x = estimate, y = group, color = diag)) +
+  ggplot2::geom_vline(xintercept = 0, linetype = "dotted") +
+  ggstance::geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), position = ggplot2::position_dodge(width = 1.2), height = 0.5) +
+  ggplot2::geom_point(size = 2.5, position = ggplot2::position_dodge(width = 1.2)) +
+  ggplot2::geom_text(
+    aes(x = ns_x, label = ns_label, group = diag),
+    color = "black",
+    size = 5,
+    hjust = -0.6,
+    vjust = 0.8,
+    position = ggplot2::position_dodge(width = 1.2),
+    family = "Times New Roman"
+  ) +
+  ggplot2::scale_color_viridis_d(option = "D") +
+  ggplot2::labs(title = "Factorized Regression Coefficients for Age of Onset", x = "Beta (95% CI)", y = NULL, color = "Diagnostic Group") +
+  ggplot2::facet_grid(group ~ ., scales = "free_y", space = "free_y", switch = "y") +
+  ggplot2::guides(color = ggplot2::guide_legend(reverse = TRUE)) +
+  ggplot2::theme(axis.text.y = ggplot2::element_blank(),
+        axis.text.x = ggplot2::element_text(size = 12),
+    strip.background = ggplot2::element_rect(fill = "grey90", color = NA),
+    strip.placement = "outside",
+    strip.text.y.left = ggplot2::element_text(
+      size = 11,
+      margin = margin(l = 10, r = 10),
+      angle = 0,
+      family = "Times New Roman"
+    )
+  )
+
+#ggplot2::ggsave("placeholder.tiff", plot = ggplot2::last_plot(), width = 8, height = 6, units = "in", dpi = 600)
+```
+
+# Hospitalization Burden regression (Figure 6)
+## Hospitalization distribution (Figure 6A)
+```{r hosp dist}
+# Summary statistics
+stats <- ELA_data %>%
+  dplyr::summarise(
+    m = mean(hospitalization, na.rm = TRUE),
+    s = sd(hospitalization, na.rm = TRUE),
+    med = median(hospitalization, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Barchart of ELA distribution
+ggplot2::ggplot(ELA_data, ggplot2::aes(x = hospitalization)) +
+  ggplot2::geom_histogram(ggplot2::aes(y = ggplot2::after_stat(count/sum(count))), position = "dodge",
+                 color = "black",
+                 fill = "#440154",
+                 bins = 20
+                 ) +
+  ggplot2::labs(title = "Distribution of Average Hospitalization Burden", x = "Avg. Hospitalization Burden", y = "Proportion") + 
+  ggplot2::scale_x_continuous(limits = c(-0.1, 1.05)) +
+  ggplot2::scale_y_continuous(limits = c(0, 0.109))
+  
+#ggplot2::ggsave("placeholder.tiff", plot = ggplot2::last_plot(), width = 7, height = 5, units = "in", dpi = 600)
+```
+
+## ELA score - hospitalization burden regression (Figure 6B)
+```{r ela-hosp reg}
+# Run linear model
+model <- lm(hospitalization ~ 
+               ELA_score +
+               sex +
+               ref_yob
+            , data = ELA_data)
+
+sm <- summary(model)
+pf(sm$fstatistic[1], sm$fstatistic[2], sm$fstatistic[3], lower.tail = FALSE)
+
+# Assumptions:
+## Linearity - residual plot
+plot(fitted(model), residuals(model))
+
+## Normality - QQ-plot
+car::qqPlot(residuals(model))
+
+## Multicollinearity - VIF
+car::vif(model)
+
+# Generating new data for plotting and fixing age and sex
+newdat <- data.frame(
+  ELA_score = seq(-1, 20, length.out = 200),
+  sex = names(which.max(table(ELA_data$sex))),
+  ref_yob = mean(ELA_data$ref_yob, na.rm = TRUE)
+)
+
+# y_hat is used for the regression line in the plot
+newdat$y_hat <- predict(model, newdat)
+
+# Factorize and anonymize data
+temp <- ELA_data %>%
+ dplyr::mutate(
+   # ...
+ )
+
+# Plot
+ggplot2::ggplot(temp, ggplot2::aes(x = ELA_score, y = hospitalization)) +
+  ggplot2::geom_violin(trim = FALSE, fill = "#440154", color = "black", alpha = 0.7) +
+  ggplot2::geom_boxplot(width = 0.25, outlier.shape = NA) +
+  ggplot2::geom_line(data = subset(newdat, ELA_score >= 0 & ELA_score <= 16), 
+                         ggplot2::aes(x = ELA_score, y = y_hat), 
+                         colour = "red", 
+                         alpha = 0.8, 
+                         linetype = "dashed", 
+                         linewidth = 1) +
+  ggplot2::scale_x_discrete(drop = FALSE) +
+  ggplot2::labs(title = "Linear Regression Between Hospitalization Burden & ELA Score", x = "ELA Score", y = "Avg. Hospitalization Burden") +
+  ggplot2::ylim(-0.2, 1.45) +
+  ggplot2::theme(panel.grid.minor = ggplot2::element_blank())
+
+# Counts
+table(temp$ELA_score)
+
+#ggplot2::ggsave("placeholder.tiff", plot = ggplot2::last_plot(), width = 7, height = 5, units = "in", dpi = 600)
+```
+
+## Diagnosis-wise forest plot (Figure 6C) and factorized forest plot (Figure 6D)
+```{r ela-hosp reg diag-wise}
+# Define variables
+groups <- list(
+   Score = "ELA_score",
+  `Abuse & Illness` = "abuse_ill",
+  `Behavioral Adversities` = "beh_adv",
+  `Household Dysfunciton` = "house_dys",
+  `Confounding Factors` = c("sexfemale", "ref_yob")
+)
+
+# Define datasets
+diags <- list(ELA_data, scz, sad, bd, mdd, other)
+diag_names <- c("Total", "SCZ", "SAD", "BD", "Psychotic MDD", "Other Psychosis")
+
+# ELA score - hospitalization burden regression statistics per diagnosis
+score_row_raw <- dplyr::tibble()
+i <- 1
+for (d in diags){
+  fit_tot <- lm(hospitalization ~ 
+              ELA_score +
+              sex + 
+              ref_yob
+              , data = d)
+  
+  V_tot <- sandwich::vcovHC(fit_tot, type = "HC3")
+  sm <- summary(fit_tot)
+  
+  adj_r_tot <- sm$adj.r.squared
+  f_tot <- sm$fstatistic[1]
+  df1_tot <- sm$fstatistic[2]
+  df2_tot <- sm$fstatistic[3]
+  pf_tot <- pf(sm$fstatistic[1], sm$fstatistic[2], sm$fstatistic[3], lower.tail = FALSE)
+  
+  beta_tot <- coef(fit_tot)
+  se_tot   <- sqrt(diag(V_tot))
+  tval_tot <- beta_tot / se_tot
+  p_tot <- 2 * pt(abs(tval_tot), df = df.residual(fit_tot), lower.tail = FALSE)
+  
+  score_row <- dplyr::tibble(
+    term = names(beta_tot),
+    estimate = as.numeric(beta_tot),
+    std.error = as.numeric(se_tot),
+    p.value = as.numeric(p_tot),
+    crit = qt(1 - 0.05/2, df = df.residual(fit_tot)),
+    conf.low  = estimate - crit * std.error,
+    conf.high = estimate + crit * std.error,
+    
+    adj_r2 = as.numeric(adj_r_tot),
+    f_val = as.numeric(f_tot),
+    f_p =  as.numeric(pf_tot),
+    df1 = as.numeric(df1_tot),
+    df2 = as.numeric(df2_tot),
+  
+    group = dplyr::case_when(
+        term %in% groups$Score ~ "ELA Score",
+        term %in% groups$`Confounding Factors` ~ "Confounding Factors",
+        TRUE ~ "Other"
+        ),
+    diag = diag_names[i]
+  ) %>% dplyr::filter(term == "ELA_score")
+  
+  score_row_raw <- dplyr::bind_rows(score_row_raw, score_row)
+  i <- i + 1
+}
+
+# Factorized ELA score - hospitalization burden regression statistics per diagnosis
+df_plot_raw = dplyr::tibble()
+i <- 1
+
+for (d in diags){
+  fit <- lm(hospitalization ~ 
+              house_dys +
+              beh_adv +
+              abuse_ill +
+              sex + 
+              ref_yob
+              , data = d)
+  
+  V <- sandwich::vcovHC(fit, type = "HC3")
+  sm <- summary(fit)
+  
+  adj_r <- sm$adj.r.squared
+  f <- sm$fstatistic[1]
+  df1_val <- sm$fstatistic[2]
+  df2_val <- sm$fstatistic[3]
+  pf <- pf(sm$fstatistic[1], sm$fstatistic[2], sm$fstatistic[3], lower.tail = FALSE)
+  
+  beta <- coef(fit)
+  se   <- sqrt(diag(V))
+  tval <- beta / se
+  pval <- 2 * pt(abs(tval), df = df.residual(fit), lower.tail = FALSE)
+  
+  df_plot <- tibble(
+    term = names(beta),
+    estimate = as.numeric(beta),
+    std.error = as.numeric(se),
+    statistic = as.numeric(tval),
+    p.value = as.numeric(pval),
+    crit = qt(1 - 0.05/2, df = df.residual(fit)),
+    conf.low  = estimate - crit * std.error,
+    conf.high = estimate + crit * std.error,
+    
+    adj_r2 = as.numeric(adj_r),
+    f_val = as.numeric(f),
+    f_p =  as.numeric(pf),
+    df1 = df1_val,
+    df2 = df2_val,
+    
+    group = dplyr::case_when(
+        term %in% groups$Score ~ "ELA Score",
+        term %in% groups$`Household Dysfunciton`  ~ "Household Dysfunciton",
+        term %in% groups$`Behavioral Adversities`   ~ "Behavioral Adversities",
+        term %in% groups$`Abuse & Illness` ~ "Abuse & Illness",
+        term %in% groups$`Confounding Factors` ~ "Confounding Factors",
+        TRUE ~ "Other"
+      ),
+    diag = diag_names[i]
+    ) %>%
+    dplyr::filter(term != "(Intercept)")
+  df_plot_raw <- dplyr::bind_rows(df_plot_raw, df_plot)
+  i <- i + 1
+}
+
+# Individual padding for each significance mark in plot
+x_range <- range(c(df_plot_raw$conf.low, df_plot_raw$conf.high), na.rm = TRUE)
+x_pad <- 0.01 * diff(x_range)
+
+# Finalize plot dataframe
+df_plot_tot <- dplyr::bind_rows(df_plot_raw, score_row_raw) %>% 
+  dplyr::mutate(term = reorder(term, estimate)) %>% 
+  dplyr::mutate(group = factor(group, levels = c("ELA Score", "Abuse & Illness", "Behavioral Adversities", "Household Dysfunciton", "Confounding Factors"))) %>%
+  dplyr::mutate(ns_x = conf.high + x_pad) %>%
+  dplyr::filter(group != "Confounding Factors") %>%
+  dplyr::mutate(diag = factor(diag, levels = c("Total", "SCZ", "SAD", "BD", "Psychotic MDD", "Other Psychosis"))) %>%
+  dplyr::mutate(diag = forcats::fct_rev(diag)) %>%
+  dplyr::mutate(p_adj = p.adjust(p.value, method = "BH")) %>%
+  dplyr::mutate(ns_label = dplyr::case_when(
+        p_adj < 0.001 ~ "***",
+        p_adj < 0.01 ~ "**",       
+        p_adj < 0.05 ~ "*",       
+        TRUE ~ ""))
+  
+ggplot2::ggplot(df_plot_tot, ggplot2::aes(x = estimate, y = group, color = diag)) +
+  ggplot2::geom_vline(xintercept = 0, linetype = "dotted") +
+  ggstance::geom_errorbarh(ggplot2::aes(xmin = conf.low, xmax = conf.high),  position = ggplot2::position_dodge(width = 1.2), height = 0.5) +
+  ggplot2::geom_point(size = 2.5, position = ggplot2::position_dodge(width = 1.2)) +
+  ggplot2::geom_text(
+    ggplot2::aes(x = ns_x, label = ns_label, group = diag),
+    color = "black",
+    size = 5,
+    hjust = -0.6,
+    vjust = 0.8,
+    position = ggplot2::position_dodge(width = 1.2),
+    family = "Times New Roman"
+  ) +
+  ggplot2::scale_color_viridis_d(option = "D") +
+  ggplot2::labs(title = "Factorized Regression Coefficients \nof Hospitalization Burden", x = "Beta (95% CI)", y = NULL, color = "Diagnostic Group") +
+  ggplot2::facet_grid(group ~ ., scales = "free_y", space = "free_y", switch = "y") +
+  ggplot2::guides(color = ggplot2::guide_legend(reverse = TRUE)) +
+  ggplot2::theme(axis.text.y = ggplot2::element_blank(),
+        axis.text.x = ggplot2::element_text(size = 12),
+    strip.background = ggplot2::element_rect(fill = "grey90", color = NA),
+    strip.placement = "outside",
+    strip.text.y.left = ggplot2::element_text(
+      size = 11,
+      margin = margin(l = 10, r = 10),
+      angle = 0,
+      family = "Times New Roman"
+    )
+  )
+
+#ggplot2::ggsave("placeholder.tiff", plot = ggplot2::last_plot(), width = 8, height = 6, units = "in", dpi = 600)
+```
+
+# Level of Education (Figure 7 & 8)
+## Level of education distribution (Figure 8A)
+```{r loe dist}
+# Prepare plot data
+loe_data <- ELA_data %>%
+  dplyr::filter(!is.na(lev_of_edu), !is.na(ELA_score)) %>%
+  count(lev_of_edu) %>%
+  dplyr::mutate(loe_prop = n / sum(n)) %>%
+  dplyr::mutate(n_count = paste0("n = ", n))
+
+# Barchart of LoE distribution
+ggplot2::ggplot(loe_data, ggplot2::aes(x = lev_of_edu, y = loe_prop, fill = lev_of_edu)) +
+  ggplot2::geom_col(width = 0.4, fill = "#440154") +
+  ggplot2::scale_y_continuous(limits = c(0, 0.5)) +
+  ggplot2::geom_text(ggplot2::aes(label = n_count, y = loe_prop + 0.03),
+            family = "Times New Roman",
+            size = 3) +
+  ggplot2::labs(title = "Distribution of Level of Education",
+       x = NULL,
+       y = "Proportion") +
+  ggplot2::theme(axis.text = ggplot2::element_text(size = 10),
+        axis.title.y = ggplot2::element_text(size = 12))
+
+# Counts
+loe_data
+
+#ggplot2::ggsave("placeholder.tiff", plot = ggplot2::last_plot(), width = 4, height = 2.5, units = "in", dpi = 600)
+```
+
+## ANCOVA and pairwise ELA EMM comparison between levels (Figure 7)
+```{r ela emm diag-wise}
+# Data prep
+plot_df <- ELA_data %>% dplyr::select(lev_of_edu, ELA_score, ref_yob, sex)
+
+# ANCOVA
+fit <- lm(ELA_score ~ lev_of_edu + ref_yob + sex, data = plot_df)
+sm <- summary(fit)
+pf(sm$fstatistic[1], sm$fstatistic[2], sm$fstatistic[3], lower.tail = FALSE)
+
+F_test <- emmeans::joint_tests(fit)
+F_test$p.value
+
+## Produce ELA EMMs for each level of education
+emm <- emmeans::emmeans(fit, ~ lev_of_edu, vcov = sandwich::vcovHC(fit, type = "HC3"))
+em_df <- as.data.frame(emm)
+
+## Pairwise comparison of EMMs in plot
+pairs <- as.data.frame(pairs(emm, adjust = "BH"))
+
+# Plot
+temp <- plot_df %>%
+  dplyr::filter(!is.na(lev_of_edu), !is.na(ELA_score))
+
+ggplot2::ggplot(temp, ggplot2::aes(x = lev_of_edu, y = ELA_score, fill = "ELA")) + 
+  ggplot2::stat_boxplot(geom = "errorbar", width = 0.05, color = "grey70") +
+  ggplot2::geom_boxplot(width = 0.33, 
+               outlier.shape = NA,
+               fill = "white",
+               color = "grey70") +
+  ggplot2::geom_point(data = em_df,
+             ggplot2::aes(y = emmean, fill = "EMM"),
+             shape = 18,
+             color = "#440154",
+             size = 5) +
+  ggpubr::geom_bracket(
+    xmin = c("primary", "secondary", "tertiary"),
+    xmax = c("secondary", "tertiary", "primary"),
+    label = c("***", "***", "***"),
+    color = "#440154",
+    y.position = c(16, 17.5, 19),
+    family = "Times New Roman",
+    label.size = 5
+  ) +
+  ggplot2::scale_x_discrete(drop = FALSE, labels = c("0" = "tertiary")) +
+  ggplot2::labs(title = "ELA & EMM Scores per Level of Education", x = "Level of Education", y = "Score") +
+  ggplot2::ylim(-1, 20) +
+  ggplot2::theme(panel.grid.minor = ggplot2::element_blank(),
+        legend.title = ggplot2::element_blank(),
+        axis.text = ggplot2::element_text(size = 12),
+        axis.title = ggplot2::element_text(size = 14))
+
+#ggplot2::ggsave("placeholder.tiff", plot = ggplot2::last_plot(), width = 8, height = 6, units = "in", dpi = 600)
+```
+
+## Level of Education Distribution (Figure 8B)
+```{r}
+# Factorize and anonymize data
+temp <- ELA_data %>%
+ dplyr::mutate(
+   # ...
+ )
+
+# Generate plot data
+plot_data <- temp %>%
+  dplyr::filter(!is.na(lev_of_edu)) %>%
+  dplyr::mutate(ELA_score = as.numeric(as.character(ELA_score))) %>%
+  dplyr::group_by(ELA_score, lev_of_edu) %>%
+  dplyr::summarize(count = dplyr::n(), .groups = "drop") %>%
+  dplyr::group_by(lev_of_edu) %>%
+  dplyr::mutate(proportion = count / sum(count)) %>%
+  dplyr::ungroup()
+
+# Calculate n for each score
+n_labels <- temp %>%
+  dplyr::filter(!is.na(lev_of_edu)) %>%
+  dplyr::mutate(ELA_score = as.numeric(as.character(ELA_score))) %>%
+  dplyr::group_by(ELA_score) %>%
+  dplyr::summarise(n = dplyr::n(), .groups = 'drop') %>%
+  tidyr::complete(ELA_score = 0:14, fill = list(n = 0)) %>%
+  dplyr::mutate(label = paste0("n=", n))
+
+# Plot
+#ggplot2::ggplot_build(
+  ggplot2::ggplot(plot_data, ggplot2::aes(x = ELA_score, y = proportion, fill = lev_of_edu)) +
+  ggplot2::geom_bar(stat = "identity", position = "dodge", width = 0.8) +
+  ggplot2::scale_fill_viridis_d() +
+  ggplot2::scale_x_continuous(breaks = c(0:13, 14), limits = c(-0.4, 14.5), labels = c(as.character(0:13), ">14")) +
+  ggplot2::scale_y_continuous(limits = c(0, 0.169)) +
+  ggplot2::labs(title = "Distribution of Level of Education",
+       fill = "Level of Education",
+       x = "ELA Score", 
+       y = "Proportion")#)$data[[1]]
+
+#ggplot2::ggsave("placeholder.tiff", plot = ggplot2::last_plot(), width = 8, height = 5, units = "in", dpi = 600)
+```
+
+## Ordinal logistic regression (Figure 8C & 8D)
+```{r loe olr}
+# Defining variables for regressions
+groups <- list(
+   Score = "ELA_score",
+  `Abuse & Illness` = "abuse_ill",
+  `Behavioral Adversities` = "beh_adv",
+  `Household Dysfunciton` = "house_dys",
+  `Confounding Factors` = c("sexfemale", "ref_yob")
+)
+
+# Defining groups for regressions
+diags <- list(ELA_data, scz, sad, bd, mdd, other)
+diag_names <- c("Total", "SCZ", "SAD", "BD", "Psychotic MDD", "Other Psychosis")
+
+# ELA score statistics
+score_row_raw <- dplyr::tibble()
+i <- 1
+for (d in diags){
+  fit_tot <- ordinal::clm(lev_of_edu ~ ELA_score,
+                 nominal = ~ sex + ref_yob, 
+                 data = d)
+  fit_null <- ordinal::clm(lev_of_edu ~ 1,
+                  data = d)
+  nt_tot <- ordinal::nominal_test(fit_tot) # Checking proportional odds assumption
+  nt_LRT_tot <- nt_tot$LRT[2]
+  nt_p_tot <- nt_tot$`Pr(>Chi)`[2]
+
+  aov <- anova(fit_null, fit_tot, test = "LRT")
+  chi_tot <- aov$LR.stat[2]
+  df_tot <- aov$df[2]
+  pchi_tot <- aov$`Pr(>Chisq)`[2]
+  pseudo_r2_tot <- as.numeric(logLik(fit_tot)) / as.numeric(logLik(fit_null))
+  
+  res <- as.data.frame(coef(summary(fit_tot)))
+  OR_tot <- exp(res$Estimate)
+  se_tot   <- res$`Std. Error`
+  z_tot <- res$`z value`
+  p_tot <- res$`Pr(>|z|)`
+  
+  score_row <- dplyr::tibble(
+    term = rownames(res),
+    nt_log_lik_tot = nt_LRT_tot,
+    nt_p_tot = nt_p_tot,
+    estimate = as.numeric(OR_tot),
+    std.error = as.numeric(se_tot),
+    z_val = as.numeric(z_tot),
+    p.value = as.numeric(p_tot),
+    crit = qt(1 - 0.05/2, df = df.residual(fit_tot)),
+    conf.low  = estimate - crit * std.error,
+    conf.high = estimate + crit * std.error,
+    
+    chi_sq = chi_tot,
+    df = df_tot,
+    p_chi = pchi_tot,
+    pseudo_r2 = pseudo_r2_tot,
+  
+    group = dplyr::case_when(
+        term %in% groups$Score ~ "ELA Score",
+        term %in% groups$`Confounding Factors` ~ "Confounding Factors",
+        TRUE ~ "Other"
+        ),
+    diag = diag_names[i]
+  ) %>% dplyr::filter(term == "ELA_score")
+  
+  score_row_raw <- dplyr::bind_rows(score_row_raw, score_row)
+  i <- i + 1
+}
+
+# Category-specific statistics 
+df_plot_raw = dplyr::tibble()
+i <- 1
+
+for (d in diags){
+  fit <- ordinal::clm(lev_of_edu ~ 
+              house_dys +
+              beh_adv +
+              abuse_ill,
+              nominal = ~ sex + ref_yob
+              , data = d)
+  
+  fit_null <- ordinal::clm(lev_of_edu ~ 1, data = d)
+  
+  nt <- ordinal::nominal_test(fit)
+  nt_LRT1 <- nt$logLik[2]
+  nt_p1 <- nt$`Pr(>Chi)`[2]
+  nt_LRT2 <- nt$logLik[3]
+  nt_p2 <- nt$`Pr(>Chi)`[3]
+  nt_LRT3 <- nt$logLik[4]
+  nt_p3 <- nt$`Pr(>Chi)`[4]
+  
+  aov <- anova(fit_null, fit)
+  chi_sq <- aov$LR.stat[2]
+  df_val <- aov$df[2]
+  pchi <- aov$`Pr(>Chisq)`[2]
+  pseudo_r2 <- as.numeric(logLik(fit)) / as.numeric(logLik(fit_null))
+  
+  res <- as.data.frame(coef(summary(fit)))
+  OR <- exp(res$Estimate)
+  se <- res$`Std. Error`
+  z <- res$`z value`
+  p <- res$`Pr(>|z|)`
+  
+  df_plot <- dplyr::tibble(
+    term = rownames(res),
+    nt_log_lik_fct = paste(nt_LRT1, nt_LRT2, nt_LRT3),
+    nt_p_fct = paste(nt_p1, nt_p2, nt_p3),
+    estimate = as.numeric(OR),
+    std.error = as.numeric(se),
+    z_val = as.numeric(z),
+    p.value = as.numeric(p),
+    crit = qt(1 - 0.05/2, df = df.residual(fit)),
+    conf.low  = estimate - crit * std.error,
+    conf.high = estimate + crit * std.error,
+    
+    chi_sq = chi_sq,
+    df = df_val,
+    p_chi = pchi,
+    pseudo_r2 = pseudo_r2,
+    
+    group = dplyr::case_when(
+        term %in% groups$Score ~ "ELA Score",
+        term %in% groups$`Household Dysfunciton`  ~ "Household Dysfunciton",
+        term %in% groups$`Behavioral Adversities`   ~ "Behavioral Adversities",
+        term %in% groups$`Abuse & Illness` ~ "Abuse & Illness",
+        term %in% groups$`Confounding Factors` ~ "Confounding Factors",
+        TRUE ~ "Other"
+      ),
+    diag = diag_names[i]
+    ) %>%
+    dplyr::filter(term != "(Intercept)")
+  df_plot_raw <- dplyr::bind_rows(df_plot_raw, df_plot)
+  i <- i + 1
+}
+
+# Individual padding for each significance mark in plot
+x_range <- range(c(df_plot_raw$conf.low, df_plot_raw$conf.high), na.rm = TRUE)
+x_pad <- 0.01 * diff(x_range)
+
+# Finalize plot data frame
+df_plot_tot <- dplyr::bind_rows(df_plot_raw, score_row_raw) %>% 
+  dplyr::mutate(term = reorder(term, estimate)) %>% 
+  dplyr::mutate(group = factor(group, levels = c("ELA Score", "Abuse & Illness", "Behavioral Adversities", "Household Dysfunciton", "Confounding Factors"))) %>%
+  dplyr::mutate(ns_x = conf.high + x_pad) %>%
+  dplyr::filter(group != "Confounding Factors") %>%
+  dplyr::mutate(diag = factor(diag, levels = c("Total", "SCZ", "SAD", "BD", "Psychotic MDD", "Other Psychosis"))) %>%
+  dplyr::mutate(diag = forcats::fct_rev(diag)) %>%
+  dplyr::mutate(p_adj = p.adjust(p.value, method = "BH")) %>%
+  dplyr::mutate(ns_label = dplyr::case_when(
+        p_adj < 0.001 ~ "***",
+        p_adj < 0.01 ~ "**",       
+        p_adj < 0.05 ~ "*",       
+        TRUE ~ ""))
+
+# Plot
+ggplot2::ggplot(df_plot_tot, ggplot2::aes(x = estimate, y = group, color = diag)) +
+  ggplot2::geom_vline(xintercept = 1, linetype = "dotted") +
+  ggstance::geom_errorbarh(aes(xmin = conf.low, xmax = conf.high),  position = ggplot2::position_dodge(width = 1.2), height = 0.5) +
+  ggplot2::geom_point(size = 2.5, position = position_dodge(width = 1.2)) +
+  ggplot2::geom_text(
+    ggplot2::aes(x = ns_x, label = ns_label, group = diag),
+    color = "black",
+    size = 5,
+    hjust = -0.6,
+    vjust = 0.8,
+    position = position_dodge(width = 1.2),
+    family = "Times New Roman"
+  ) +
+  ggplot2::scale_color_viridis_d() +
+  ggplot2::scale_x_continuous(limits = c(0.28, 1.15)) +
+  ggplot2::labs(title = "Factorized ORs for \nLevel of Education", x = "OR (95% CI)", y = NULL, color = "Diagnostic Group") +
+  ggplot2::facet_grid(group ~ ., scales = "free_y", space = "free_y", switch = "y") +
+  ggplot2::guides(color = ggplot2::guide_legend(reverse = TRUE)) +
+  ggplot2::theme(axis.text.y = ggplot2::element_blank(),
+        axis.text.x = ggplot2::element_text(size = 12),
+        strip.background = ggplot2::element_rect(fill = "grey90", color = NA),
+        strip.placement = "outside",
+        strip.text.y.left = ggplot2::element_text(
+          size = 11,
+          margin = ggplot2::margin(l = 10, r = 10),
+          angle = 0,
+          family = "Times New Roman"
+          )
+        )
+
+#ggplot2::ggsave("placeholder.tiff", plot = ggplot2::last_plot(), width = 8, height = 6, units = "in", dpi = 600)
+```
+
+# PAL errors (Figure 9)
+## PAL Distribution (Figure 9A)
+```{r pal dist}
+# Summary statistics
+stats <- ELA_data %>%
+  dplyr::summarise(
+    m = mean(PAL_errors, na.rm = TRUE),
+    s = sd(PAL_errors, na.rm = TRUE),
+    med = median(PAL_errors, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Anonymize data
+plot_df <- ELA_data %>%
+ dplyr::mutate(
+   #...
+  )
+
+# Barchart of ELA distribution
+#ggplot2::ggplot_build(
+  ggplot2::ggplot(plot_df, ggplot2::aes(x = PAL_errors)) +
+  ggplot2::geom_histogram(ggplot2::aes(y = ggplot2::after_stat(count/sum(count))), position = "dodge",
+                 color = "black",
+                 fill = "#440154",
+                 bins = 23
+                 ) +
+  ggplot2::labs(title = "Distribution of Rank-adjusted Total PAL Errors", x = "Adjusted PAL Errors", y = "Proportion") + 
+  ggplot2::scale_x_continuous(limits = c(-3, 3)) +
+  ggplot2::scale_y_continuous(limits = c(0, 0.11))#)$data[[1]]
+
+# Counts
+table(plot_df$PAL_errors)
+
+#ggplot2::ggsave("placeholder.tiff", plot = ggplot2::last_plot(), width = 7, height = 5, units = "in", dpi = 600)
+```
+
+## ELA score - PAL error regression (Figure 8B)
+```{r ela-pal reg}
+# Run linear model
+model <- lm(PAL_errors ~ 
+               ELA_score +
+               sex +
+               ref_yob
+            , data = ELA_data)
+
+# Assumptions:
+## Linearity - residual plot
+plot(fitted(model), residuals(model))
+
+## Normality - QQ-plot
+car::qqPlot(residuals(model))
+
+## Multicollinearity - VIF
+car::vif(model)
+
+# Retrieve model statistics
+sm <- summary(model)
+pf(sm$fstatistic[1], sm$fstatistic[2], sm$fstatistic[3], lower.tail = FALSE)
+
+# Fixing age and sex for plotting
+newdat <- data.frame(
+  ELA_score = seq(-1, 20, length.out = 200),
+  sex = names(which.max(table(ELA_data$sex))),
+  ref_yob = mean(ELA_data$ref_yob, na.rm = TRUE)
+)
+
+# y_hat is used for the model line in the plot
+newdat$y_hat <- predict(model, newdat)
+
+# Factorize and anonymize data
+temp <- ELA_data %>%
+ dplyr::mutate(
+   #...
+ )
+
+# Plot
+ggplot2::ggplot(temp, ggplot2::aes(x = ELA_score, y = PAL_errors)) +
+  ggplot2::geom_violin(trim = FALSE, fill = "#440154", color = "black", alpha = 0.7) +
+  ggplot2::geom_boxplot(width = 0.25, outlier.shape = NA) +
+  ggplot2::geom_line(data = subset(newdat, ELA_score >= 0 & ELA_score <= 16), 
+                         ggplot2::aes(x = ELA_score, y = y_hat), 
+                         colour = "red", 
+                         alpha = 0.8, 
+                         linetype = "dashed", 
+                         linewidth = 1) +
+  ggplot2::scale_x_discrete(drop=FALSE) +
+  ggplot2::labs(title = "Linear Regression Between Adj. Total PAL Errors & ELA Score", x = "ELA Score", y = "Adjusted PAL Errors") +
+  ggplot2::ylim(-3.9, 4.4) +
+  ggplot2::theme(panel.grid.minor = element_blank())
+
+# Counts
+table(temp$ELA_score)
+
+#ggplot2::ggsave("placeholder.tiff", plot = ggplot2::last_plot(), width = 7, height = 5, units = "in", dpi = 600)
+```
+
+## Diagnosis-wise and factorized forest plot of linear coefficients(Figure 9C & 9D)
+```{r}
+# Define variables
+groups <- list(
+   Score = "ELA_score",
+  `Abuse & Illness` = "abuse_ill",
+  `Behavioral Adversities` = "beh_adv",
+  `Household Dysfunciton` = "house_dys",
+  `Confounding Factors` = c("sexfemale", "ref_yob")
+)
+
+# Define groups to analyze
+diags <- list(ELA_data, scz, sad, bd, mdd, other)
+diag_names <- c("Total", "SCZ", "SAD", "BD", "Psychotic MDD", "Other Psychosis")
+
+# ELA score - PAL model Statistics
+score_row_raw <- dplyr::tibble()
+i <- 1
+for (d in diags){
+  fit_tot <- lm(PAL_errors ~ 
+              ELA_score +
+              sex + 
+              ref_yob
+              , data = d)
+  
+  V_tot <- sandwich::vcovHC(fit_tot, type = "HC3")
+  sm <- summary(fit_tot)
+  
+  adj_r_tot <- sm$adj.r.squared
+  f_tot <- sm$fstatistic[1]
+  df1_tot <- sm$fstatistic[2]
+  df2_tot <- sm$fstatistic[3]
+  pf_tot <- pf(sm$fstatistic[1], sm$fstatistic[2], sm$fstatistic[3], lower.tail = FALSE)
+  
+  beta_tot <- coef(fit_tot)
+  se_tot   <- sqrt(diag(V_tot))
+  tval_tot <- beta_tot / se_tot
+  p_tot <- 2 * pt(abs(tval_tot), df = df.residual(fit_tot), lower.tail = FALSE)
+  
+  score_row <- dplyr::tibble(
+    term = names(beta_tot),
+    estimate = as.numeric(beta_tot),
+    std.error = as.numeric(se_tot),
+    p.value = as.numeric(p_tot),
+    crit = qt(1 - 0.05/2, df = df.residual(fit_tot)),
+    conf.low  = estimate - crit * std.error,
+    conf.high = estimate + crit * std.error,
+    
+    adj_r2 = as.numeric(adj_r_tot),
+    f_val = as.numeric(f_tot),
+    f_p =  as.numeric(pf_tot),
+    df1 = df1_tot,
+    df2 = df2_tot,
+  
+    group = dplyr::case_when(
+        term %in% groups$Score ~ "ELA Score",
+        term %in% groups$`Confounding Factors` ~ "Confounding Factors",
+        TRUE ~ "Other"
+        ),
+    diag = diag_names[i]
+  ) %>% dplyr::filter(term == "ELA_score")
+  
+  score_row_raw <- dplyr::bind_rows(score_row_raw, score_row)
+  i <- i + 1
+}
+
+# ELA Category - PAL model statistics 
+df_plot_raw = dplyr::tibble()
+i <- 1
+for (d in diags){
+  fit <- lm(PAL_errors ~ 
+              house_dys +
+              beh_adv +
+              abuse_ill +
+              sex + 
+              ref_yob
+              , data = d)
+  
+  V <- sandwich::vcovHC(fit, type = "HC3")
+  sm <- summary(fit)
+  
+  adj_r <- sm$adj.r.squared
+  f <- sm$fstatistic[1]
+  df1_val <- sm$fstatistic[2]
+  df2_val <- sm$fstatistic[3]
+  pf <- pf(sm$fstatistic[1], sm$fstatistic[2], sm$fstatistic[3], lower.tail = FALSE)
+  
+  beta <- coef(fit)
+  se   <- sqrt(diag(V))
+  tval <- beta / se
+  pval <- 2 * pt(abs(tval), df = df.residual(fit), lower.tail = FALSE)
+  
+  df_plot <- dplyr::tibble(
+    term = names(beta),
+    estimate = as.numeric(beta),
+    std.error = as.numeric(se),
+    statistic = as.numeric(tval),
+    p.value = as.numeric(pval),
+    crit = qt(1 - 0.05/2, df = df.residual(fit)),
+    conf.low  = estimate - crit * std.error,
+    conf.high = estimate + crit * std.error,
+    
+    adj_r2 = as.numeric(adj_r),
+    f_val = as.numeric(f),
+    f_p =  as.numeric(pf),
+    df1 = df1_val,
+    df2 = df2_val,
+    
+    group = dplyr::case_when(
+        term %in% groups$Score ~ "ELA Score",
+        term %in% groups$`Household Dysfunciton`  ~ "Household Dysfunciton",
+        term %in% groups$`Behavioral Adversities`   ~ "Behavioral Adversities",
+        term %in% groups$`Abuse & Illness` ~ "Abuse & Illness",
+        term %in% groups$`Confounding Factors` ~ "Confounding Factors",
+        TRUE ~ "Other"
+      ),
+    diag = diag_names[i]
+    ) %>%
+    dplyr::filter(term != "(Intercept)")
+  df_plot_raw <- dplyr::bind_rows(df_plot_raw, df_plot)
+  i <- i + 1
+}
+
+# Individual padding for each significance mark in plot
+x_range <- range(c(df_plot_raw$conf.low, df_plot_raw$conf.high), na.rm = TRUE)
+x_pad <- 0.01 * diff(x_range)
+
+# Finalize plot data frame
+df_plot_tot <- dplyr::bind_rows(df_plot_raw, score_row_raw) %>% 
+  dplyr::mutate(term = reorder(term, estimate)) %>% 
+  dplyr::mutate(group = factor(group, levels = c("ELA Score", "Abuse & Illness", "Behavioral Adversities", "Household Dysfunciton", "Confounding Factors"))) %>%
+  dplyr::mutate(ns_x = conf.high + x_pad) %>%
+  dplyr::filter(group != "Confounding Factors") %>%
+  dplyr::mutate(diag = factor(diag, levels = c("Total", "SCZ", "SAD", "BD", "Psychotic MDD", "Other Psychosis"))) %>%
+  dplyr::mutate(diag = forcats::fct_rev(diag)) %>%
+  dplyr::mutate(p_adj = p.adjust(p.value, method = "BH")) %>%
+  dplyr::mutate(ns_label = dplyr::case_when(
+        p_adj < 0.001 ~ "***",
+        p_adj < 0.01 ~ "**",       
+        p_adj < 0.05 ~ "*",       
+        TRUE ~ ""))
+  
+ggplot2::ggplot(df_plot_tot, ggplot2::aes(x = estimate, y = group, color = diag)) +
+  ggplot2::geom_vline(xintercept = 0, linetype = "dotted") +
+  ggstance::geom_errorbarh(aes(xmin = conf.low, xmax = conf.high),  position = ggplot2::position_dodge(width = 1.2), height = 0.5) +
+  ggplot2::geom_point(size = 2.5, position = ggplot2::position_dodge(width = 1.2)) +
+  ggplot2::geom_text(
+    ggplot2::aes(x = ns_x, label = ns_label, group = diag),
+    color = "black",
+    size = 5,
+    hjust = -0.6,
+    vjust = 0.8,
+    position = ggplot2::position_dodge(width = 1.2),
+    family = "Times New Roman"
+  ) +
+  ggplot2::scale_color_viridis_d() +
+  ggplot2::scale_x_continuous(limits = c(-0.15, 0.45)) +
+  ggplot2::labs(title = "Factorized Regression Coefficients for \nRank-adjusted Total PAL Errors", x = "Beta (95% CI)", y = NULL, color = "Diagnostic Group") +
+  ggplot2::facet_grid(group ~ ., scales = "free_y", space = "free_y", switch = "y") +
+  ggplot2::guides(color = ggplot2::guide_legend(reverse = TRUE)) +
+  ggplot2::theme(axis.text.y = ggplot2::element_blank(),
+        axis.text.x = ggplot2::element_text(size = 12),
+        strip.background = ggplot2::element_rect(fill = "grey90", color = NA),
+        strip.placement = "outside",
+        strip.text.y.left = ggplot2::element_text(
+          size = 11,
+          margin = margin(l = 10, r = 10),
+          angle = 0,
+          family = "Times New Roman"
+          )
+        )
+
+#ggplot2::ggsave("placeholder.tiff", plot = ggplot2::last_plot(), width = 8, height = 6, units = "in", dpi = 600)
+```
+
+# SCZ-PGS Distribution (Figure 9)
+```{r pgs dist}
+# Summary statistics
+stats <- ELA_data %>%
+  dplyr::summarise(
+    m = mean(scz_prs, na.rm = TRUE),
+    s = sd(scz_prs, na.rm = TRUE),
+    med = median(scz_prs, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Anonymize data
+plot_df <- ELA_data %>%
+ dplyr::mutate(
+   #...
+ )
+
+# Histogram of SCZ-PGS distribution
+#ggplot2::ggplot_build(
+  ggplot2::ggplot(plot_df, ggplot2::aes(x = scz_prs)) +
+  ggplot2::geom_histogram(ggplot2::aes(y = ggplot2::after_stat(count/sum(count))), position = "dodge",
+                 color = "black",
+                 fill = "#440154",
+                 bins = 20
+                 ) +
+  ggplot2::labs(title = "Distribution of SCZ-PGS", x = "Polygenic Score", y = "Proportion") +
+  ggplot2::scale_x_continuous(limits = c(-3.2, 5)) +
+  ggplot2::scale_y_continuous(limits = c(0, 0.168)) +
+  ggplot2::theme(axis.text = ggplot2::element_text(size = 12),
+        axis.title = ggplot2::element_text(size = 14))#)$data[[1]]
+
+#ggplot2::ggsave("placeholder.tiff", plot = ggplot2::last_plot(), width = 8, height = 6, units = "in", dpi = 600)
+```
+
+# PGS model comparison table
+## PGS - outcome models
+```{r pgs-outcome regs}
+# Multicollinearity checks - VIF
+model <- lm(PAL_errors ~ 
+              scz_prs +
+              sex +
+              ref_yob
+              , data = ELA_data)
+car::vif(model)
+sm <- summary(model)
+
+# beta CIs and p:s
+beta <- sm$coefficients[2,1]
+V <- sandwich::vcovHC(model, type = "HC3")
+se <- sqrt(diag(V))[2]
+tval <- beta / se
+pval_pal <- 2 * pt(abs(tval), df = df.residual(model), lower.tail = FALSE)
+
+crit <- qt(1 - 0.05 / 2, df = df.residual(model))
+conf.low  <- beta - crit * se
+conf.high <- beta + crit * se
+
+# Proportional Odds assumption
+model <- ordinal::clm(lev_of_edu ~ scz_prs,
+                 nominal = ~ sex + ref_yob, 
+                 data = ELA_data)
+sm <- summary(model)
+exp(sm$beta)
+ordinal::nominal_test(model)
+
+# OR CIs and p:s
+res <- as.data.frame(coef(summary(model)))[7,]
+OR <- exp(res$Estimate)
+se <- res$`Std. Error`
+z <- res$`z value`
+p_loe <- res$`Pr(>|z|)`
+
+crit <- qt(1 - 0.05 / 2, df = df.residual(model))
+conf.low  <- OR - crit * se
+conf.high <- OR + crit * se
+
+# Adjust p-values
+#ps <- c(p_loe, pval_hos, pval_age, pval_pal)
+#p.adjust(ps, method = "BH")
+```
+
+## Model comparison (Table 2)
+```{r model comp}
+# Prepare model data, outcomes and variables
+df <- ELA_data  
+ols_outcomes <- c("age_of_onset", "hospitalization", "PAL_errors")
+ord_outcome  <- "lev_of_edu"
+df[[ord_outcome]] <- factor(df[[ord_outcome]], ordered = TRUE)
+base_vars <- "scz_prs + sex + ref_yob"
+add_var <- "ELA_score"
+
+# Linear regression model fits' statistics
+ols_rows <- lapply(ols_outcomes, function(y) {
+
+  m1 <- lm(as.formula(paste(y, "~", base_vars)),             data = df)
+  m2 <- lm(as.formula(paste(y, "~", base_vars, "+", add_var)), data = df)
+
+  r2_base <- summary(m1)$adj.r.squared   # adj. r squared for the base model
+  r2_aug  <- summary(m2)$adj.r.squared   # adj. r squared for the extended model
+  delta_aic <- AIC(m2) - AIC(m1)         # delta AIC
+  delta_bic <- BIC(m2) - BIC(m1)         # delta BIC
+
+  lrt   <- anova(m1, m2)                 # likelihood ratio test
+  chi2  <- lrt$`F`[2] * lrt$Df[2]        # Chi squared value
+  p_val <- lrt$`Pr(>F)`[2]               # LRT p-value
+
+  data.frame(
+    Outcome    = y,
+    Type       = "OLS",
+    R2_Base    = r2_base,
+    R2_Aug     = r2_aug,
+    Delta_AIC  = delta_aic,
+    Delta_BIC  = delta_bic,
+    LRT_chi2   = chi2,
+    p          = p_val
+  )
+})
+
+## r^2 for ordinal logistic regression
+get_mcfadden_adj <- function(fit, fit_null) {
+  k <- length(fit$beta)                         # regression coefficients only, excludes thresholds
+  1 - ((fit$logLik - k) / fit_null$logLik)      # Adj. McFadden's R^2 formula
+}
+
+# OLR model fit statistics
+m_null <-  ordinal::clm(as.formula(paste(ord_outcome, "~ 1")), data = df)
+m1_ord <-  ordinal::clm(lev_of_edu ~ scz_prs, nominal = ~ sex + ref_yob, data = df)
+m2_ord <-  ordinal::clm(lev_of_edu ~ scz_prs + ELA_score, nominal = ~ sex + ref_yob, data = df)
+lrt_ord  <- anova(m1_ord, m2_ord)
+ord_row <- data.frame(
+  Outcome   = paste0(ord_outcome, " (ordinal)"),
+  Type      = "CLM",
+  R2_Base   = get_mcfadden_adj(m1_ord, m_null),
+  R2_Aug    = get_mcfadden_adj(m2_ord, m_null),
+  Delta_AIC = AIC(m2_ord) - AIC(m1_ord),
+  Delta_BIC = BIC(m2_ord) - BIC(m1_ord),
+  LRT_chi2  = lrt_ord$LR.stat[2],
+  p         = lrt_ord$`Pr(>Chisq)`[2]
+)
+
+# Put together final result table
+final_table <- dplyr::bind_rows(ols_rows, ord_row) %>%
+  dplyr::mutate(
+    R2_Base  = round(R2_Base,  5),
+    R2_Aug   = round(R2_Aug,   5),
+    Delta_AIC = round(Delta_AIC, 5),
+    Delta_BIC = round(Delta_BIC, 5),
+    LRT_chi2  = round(LRT_chi2, 5),
+    adj_p    = signif(p.adjust(p, method = "BH"), 5)
+  ) %>%
+  dplyr::select(-Type) %>%
+  dplyr::rename(
+    "Outcome"          = Outcome,
+    "R² Base"          = R2_Base,
+    "R² Aug"           = R2_Aug,
+    "d_AIC"             = Delta_AIC,
+    "d_BIC"             = Delta_BIC,
+    "LRT X²"           = LRT_chi2,
+    "p"                = p
+  )
+print(final_table, row.names = FALSE)
+```
