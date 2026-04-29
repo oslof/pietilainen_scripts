@@ -574,6 +574,9 @@ ggplot2::ggplot(temp, ggplot2::aes(x = ELA_score, y = age_of_onset)) +
 table(temp$ELA_score)
 
 #ggplot2::ggsave("placeholder.tiff", plot = ggplot2::last_plot(), width = 7, height = 5, units = "in", dpi = 600)
+
+# Standardize (Table 2)
+sm$coefficients[2,1] / (max(df$col, na.rm = TRUE) - min(df$col, na.rm = TRUE))
 ```
 
 ## Diagnosis-wise forest plot (Figure 5C) and factorized forest plot (Figure 5D)
@@ -847,6 +850,9 @@ ggplot2::ggplot(temp, ggplot2::aes(x = ELA_score, y = hospitalization)) +
 table(temp$ELA_score)
 
 #ggplot2::ggsave("placeholder.tiff", plot = ggplot2::last_plot(), width = 7, height = 5, units = "in", dpi = 600)
+
+# Standardize (Table 2)
+sm$coefficients[2,1] / (max(df$col, na.rm = TRUE) - min(df$col, na.rm = TRUE))
 ```
 
 ## Diagnosis-wise forest plot (Figure 6C) and factorized forest plot (Figure 6D)
@@ -1432,6 +1438,9 @@ ggplot2::ggplot(temp, ggplot2::aes(x = ELA_score, y = PAL_errors)) +
 table(temp$ELA_score)
 
 #ggplot2::ggsave("placeholder.tiff", plot = ggplot2::last_plot(), width = 7, height = 5, units = "in", dpi = 600)
+
+# Standardize (Table 2)
+sm$coefficients[2,1] / (max(df$col, na.rm = TRUE) - min(df$col, na.rm = TRUE))
 ```
 
 ## Diagnosis-wise and factorized forest plot of linear coefficients(Figure 9C & 9D)
